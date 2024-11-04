@@ -30,6 +30,27 @@ pub struct DataRow {
     sinn: usize,
 }
 
+impl Into<ShortenedDataRow> for DataRow {
+    fn into(self) -> ShortenedDataRow {
+        ShortenedDataRow {
+            title: self.title,
+            link: self.link,
+            defacto: self.defacto,
+            trivial: self.trivial,
+            sinn: self.sinn,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ShortenedDataRow {
+    title: String,
+    link: String,
+    defacto: usize,
+    trivial: usize,
+    sinn: usize,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let subscriber = tracing_subscriber::FmtSubscriber::builder()
@@ -175,8 +196,11 @@ async fn main() -> anyhow::Result<()> {
 
     client.persist(&session_file).await?;
     let mut writer = csv::Writer::from_writer(File::create("results.csv")?);
+    let mut shortened_writer = csv::Writer::from_writer(File::create("results.short.csv")?);
     for row in data {
-        writer.serialize(row)?;
+        writer.serialize(row.clone())?;
+        let shortened_row: ShortenedDataRow = row.into();
+        shortened_writer.serialize(shortened_row)?
     }
 
     Ok(())
