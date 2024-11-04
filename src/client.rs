@@ -1,10 +1,8 @@
 use anyhow::{anyhow, Context};
-use moodle::client::MoodleClient;
 use reqwest::{Client, ClientBuilder, Proxy, Url};
 use reqwest_cookie_store::{CookieStore, CookieStoreMutex};
 use reqwest_scraper::ScraperResponse;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
@@ -241,64 +239,64 @@ impl AsRef<Client> for TUWElClient {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct TUWElParam<T: Serialize> {
-    pub args: T,
-    pub index: usize,
-    pub methodname: String,
-}
+// #[derive(Serialize, Deserialize)]
+// struct TUWElParam<T: Serialize> {
+//     pub args: T,
+//     pub index: usize,
+//     pub methodname: String,
+// }
 
-impl MoodleClient for TUWElClient {
-    async fn get(&self, func: &str) -> anyhow::Result<Value> {
-        let session_key = self.session.session_key.clone()
-            .ok_or(anyhow!("Session key is not set"))?;
-        let url = {
-            let mut url = BASE_URL.join("/lib/ajax/service.php")?;
-            url.set_query(Some(&format!("sesskey={}&info={func}", session_key)));
-            url
-        };
-        let response = self.session.client.get(url).send().await?;
-        let json = response.json().await?;
-        Ok(json)
-    }
-
-    async fn post<T: serde::ser::Serialize + ?Sized>(&self, func: &str, params: &T) -> anyhow::Result<serde_json::value::Value> {
-        let session_key = self.session.session_key.clone()
-            .ok_or(anyhow!("Session key is not set"))?;
-        let url = {
-            let mut url = BASE_URL.join("/lib/ajax/service.php")?;
-            url.set_query(Some(&format!("sesskey={}&info={func}", session_key)));
-            url
-        };
-        let params = vec![
-            TUWElParam {
-                args: params,
-                index: 0,
-                methodname: func.to_string(),
-            }
-        ];
-        let response = self.session.client.post(url).json(&params).send().await?;
-        let json = response.json().await?;
-        if let Value::Array(array) = json {
-            let response = array.first()
-                .ok_or(anyhow!("Received 0 responses"))?;
-
-            if let Value::Object(object) = response {
-                let error = object.get("error")
-                    .ok_or(anyhow!("Invalid response format"))?;
-
-                match error {
-                    Value::Bool(error) if !error => {
-                        Ok(object.get("data")
-                            .ok_or(anyhow!("Invalid response format"))?.clone())
-                    }
-                    _ => Err(anyhow!("Moodle Error: {error}")),
-                }
-            } else {
-                Err(anyhow!("Invalid response format"))
-            }
-        } else {
-            Err(anyhow!("Invalid response format"))
-        }
-    }
-}
+// impl MoodleClient for TUWElClient {
+//     async fn get(&self, func: &str) -> anyhow::Result<Value> {
+//         let session_key = self.session.session_key.clone()
+//             .ok_or(anyhow!("Session key is not set"))?;
+//         let url = {
+//             let mut url = BASE_URL.join("/lib/ajax/service.php")?;
+//             url.set_query(Some(&format!("sesskey={}&info={func}", session_key)));
+//             url
+//         };
+//         let response = self.session.client.get(url).send().await?;
+//         let json = response.json().await?;
+//         Ok(json)
+//     }
+// 
+//     async fn post<T: serde::ser::Serialize + ?Sized>(&self, func: &str, params: &T) -> anyhow::Result<serde_json::value::Value> {
+//         let session_key = self.session.session_key.clone()
+//             .ok_or(anyhow!("Session key is not set"))?;
+//         let url = {
+//             let mut url = BASE_URL.join("/lib/ajax/service.php")?;
+//             url.set_query(Some(&format!("sesskey={}&info={func}", session_key)));
+//             url
+//         };
+//         let params = vec![
+//             TUWElParam {
+//                 args: params,
+//                 index: 0,
+//                 methodname: func.to_string(),
+//             }
+//         ];
+//         let response = self.session.client.post(url).json(&params).send().await?;
+//         let json = response.json().await?;
+//         if let Value::Array(array) = json {
+//             let response = array.first()
+//                 .ok_or(anyhow!("Received 0 responses"))?;
+// 
+//             if let Value::Object(object) = response {
+//                 let error = object.get("error")
+//                     .ok_or(anyhow!("Invalid response format"))?;
+// 
+//                 match error {
+//                     Value::Bool(error) if !error => {
+//                         Ok(object.get("data")
+//                             .ok_or(anyhow!("Invalid response format"))?.clone())
+//                     }
+//                     _ => Err(anyhow!("Moodle Error: {error}")),
+//                 }
+//             } else {
+//                 Err(anyhow!("Invalid response format"))
+//             }
+//         } else {
+//             Err(anyhow!("Invalid response format"))
+//         }
+//     }
+// }

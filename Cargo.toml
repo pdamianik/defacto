@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-moodle = { version = "0.1.0", path = "../moodle-rs/moodle" }
-tokio = { version = "1.41.0", features = ["rt-multi-thread"] }
+#moodle = { version = "0.1.0", path = "../moodle-rs/moodle" }
+tokio = { version = "1.41.0", features = ["rt-multi-thread", "rt", "macros"] }
 reqwest = { version = "0.12.9", features = ["cookies"] }
 reqwest-scraper = "0.5.8"
 reqwest_cookie_store = "0.8.0"
