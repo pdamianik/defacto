@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use reqwest::{Client, ClientBuilder, Proxy, Url};
+use reqwest::{Client, ClientBuilder, Url};
 use reqwest_cookie_store::{CookieStore, CookieStoreMutex};
 use reqwest_scraper::ScraperResponse;
 use serde::{Deserialize, Serialize};
@@ -66,8 +66,6 @@ impl Default for Session {
 
         let client = ClientBuilder::new()
             .cookie_store(true)
-            .proxy(Proxy::all("http://localhost:8000").unwrap())
-            .danger_accept_invalid_certs(true)
             .cookie_provider(cookie_jar.clone())
             .build().unwrap();
 
@@ -86,8 +84,6 @@ impl Session {
 
         let client = ClientBuilder::new()
             .cookie_store(true)
-            .proxy(Proxy::all("http://localhost:8000")?)
-            .danger_accept_invalid_certs(true)
             .cookie_provider(cookie_jar.clone())
             .build()?;
 
