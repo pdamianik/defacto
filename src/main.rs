@@ -4,13 +4,31 @@ mod config;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+use std::sync::LazyLock;
 use anyhow::{anyhow, Context};
-use regex::RegexBuilder;
+use regex::{Regex, RegexBuilder};
 use reqwest_scraper::ScraperResponse;
+use serde::{Deserialize, Serialize};
 use subtp::vtt::{VttBlock, WebVtt};
 use tracing_subscriber::EnvFilter;
 use crate::client::{LoginData, SessionBuilder, TUWElClientBuilder};
 use crate::config::Config;
+
+const PATTERNS: [(&'static str, LazyLock<Regex>); 3] = [
+    ("De facto", LazyLock::new(|| RegexBuilder::new("[^a-zA-Z]de\\s+facto[^a-zA-Z]").case_insensitive(true).build().unwrap())),
+    ("trivial", LazyLock::new(|| RegexBuilder::new("[^a-zA-Z]trivial[^a-zA-Z]").case_insensitive(true).build().unwrap())),
+    ("Ergibt das Sinn", LazyLock::new(|| RegexBuilder::new("[^a-zA-Z]ergibt\\s+das\\s+sinn[^a-zA-Z]").case_insensitive(true).build().unwrap())),
+];
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct DataRow {
+    title: String,
+    link: String,
+    transcript: String,
+    defacto: usize,
+    trivial: usize,
+    sinn: usize,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -60,6 +78,8 @@ async fn main() -> anyhow::Result<()> {
     let links = links
         .findnodes("tr/td/a")?;
 
+    let mut data = Vec::with_capacity(links.len());
+
     for link in links {
         let video_page = client.as_ref().get(link.attr("href").ok_or(anyhow!("Video link anchor doesn't have href attribute"))?)
             .send().await?
@@ -85,59 +105,79 @@ async fn main() -> anyhow::Result<()> {
         let video_config = json::parse(video_config)
             .context("Failed to parse config json from video config script")?;
         let captions = &video_config["captions"];
-        if let Some(caption_link) = captions[0]["url"].as_str() {
-            tracing::info!("{}:", video_config["metadata"]["title"]);
-            tracing::debug!(caption_link);
 
-            let captions = client.as_ref().get(caption_link)
-                .send().await?
-                .text().await?;
-            let captions = WebVtt::parse(&captions)
-                .context("Failed to parse vtt from caption file")?;
+        let caption_link = captions[0]["url"].as_str();
+        let caption_link = if let Some(caption_link) = caption_link {
+            caption_link
+        } else {
+            continue;
+        };
+        let title = video_config["metadata"]["title"].as_str();
+        let title = if let Some(title) = title {
+            title
+        } else {
+            continue;
+        };
+        tracing::info!("{}:", title);
+        tracing::debug!(caption_link);
 
-            if captions.blocks.len() == 0 {
-                tracing::warn!("Captions are empty");
-                continue;
-            }
+        let captions = client.as_ref().get(caption_link)
+            .send().await?
+            .text().await?;
+        let captions = WebVtt::parse(&captions)
+            .context("Failed to parse vtt from caption file")?;
 
-            let raw_transcript = captions.blocks.into_iter()
-                .filter_map(|block| if let VttBlock::Que(cue) = block {
-                    Some(cue)
-                } else {
-                    None
-                })
-                .map(|cue| cue.payload.join(" "))
-                .collect::<Vec<_>>();
+        if captions.blocks.len() == 0 {
+            tracing::warn!("Captions are empty");
+            continue;
+        }
 
-            let mut transcript = Vec::with_capacity(raw_transcript.len());
-            let mut last_block = raw_transcript.first().unwrap().trim().to_string();
-            transcript.push(last_block.clone());
-            for block in raw_transcript {
-                let block = block.trim().to_string();
-                if block != last_block {
-                    transcript.push(block.clone());
-                    last_block = block;
-                }
-            }
+        let raw_transcript = captions.blocks.into_iter()
+            .filter_map(|block| if let VttBlock::Que(cue) = block {
+                Some(cue)
+            } else {
+                None
+            })
+            .map(|cue| cue.payload.join(" "))
+            .collect::<Vec<_>>();
 
-            let transcript = transcript.join(" ");
-            tracing::debug!(transcript);
-
-            let patterns = [
-                ("De facto", RegexBuilder::new("[^a-zA-Z]de\\s+facto[^a-zA-Z]").case_insensitive(true).build()?),
-                ("trivial", RegexBuilder::new("[^a-zA-Z]trivial[^a-zA-Z]").case_insensitive(true).build()?),
-                ("Ergibt das Sinn", RegexBuilder::new("[^a-zA-Z]ergibt\\s+das\\s+sinn[^a-zA-Z]").case_insensitive(true).build()?),
-            ];
-
-            for (name, pattern) in patterns.iter() {
-                let matches = pattern.find_iter(&transcript)
-                    .count();
-                tracing::info!("Found {matches} {name}s");
+        let mut transcript = Vec::with_capacity(raw_transcript.len());
+        let mut last_block = raw_transcript.first().unwrap().trim().to_string();
+        transcript.push(last_block.clone());
+        for block in raw_transcript {
+            let block = block.trim().to_string();
+            if block != last_block {
+                transcript.push(block.clone());
+                last_block = block;
             }
         }
+
+        let transcript = transcript.join(" ");
+        tracing::debug!(transcript);
+
+        let mut counts = [0; 3];
+        for (index, (name, pattern)) in PATTERNS.iter().enumerate() {
+            let matches = pattern.find_iter(&transcript)
+                .count();
+            counts[index] = matches;
+            tracing::info!("Found {matches} {name}s");
+        }
+
+        data.push(DataRow {
+            title: title.to_string(),
+            link: caption_link.to_string(),
+            transcript,
+            defacto: counts[0],
+            trivial: counts[1],
+            sinn: counts[2],
+        })
     }
 
     client.persist(&session_file).await?;
+    let mut writer = csv::Writer::from_writer(File::create("results.csv")?);
+    for row in data {
+        writer.serialize(row)?;
+    }
 
     Ok(())
 

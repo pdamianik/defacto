@@ -2,3 +2,4 @@
 .direnv
 .session.json
 app.toml
+results.csv
