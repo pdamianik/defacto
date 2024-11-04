@@ -86,7 +86,8 @@ async fn main() -> anyhow::Result<()> {
             .context("Failed to parse config json from video config script")?;
         let captions = &video_config["captions"];
         if let Some(caption_link) = captions[0]["url"].as_str() {
-            println!("{}:", video_config["metadata"]["title"]);
+            tracing::info!("{}:", video_config["metadata"]["title"]);
+            tracing::debug!(caption_link);
             
             let captions = client.as_ref().get(caption_link)
                 .send().await?
@@ -98,35 +99,41 @@ async fn main() -> anyhow::Result<()> {
                 tracing::warn!("Captions are empty");
                 continue;
             }
-
-            let mut patterns = [
-                ("de facto", RegexBuilder::new("de\\s+facto").case_insensitive(true).build()?, 0),
-                ("trivial", RegexBuilder::new("trivial").case_insensitive(true).build()?, 0),
-                ("ergibt das sinn", RegexBuilder::new("ergibt\\s+das\\s+sinn").case_insensitive(true).build()?, 0),
-            ];
-            // let mut total_line_count = 0;
-
-            for caption in captions {
-                if let VttBlock::Que(cue) = caption {
-                    for line in cue.payload.iter() {
-                        for (name, pattern, count) in patterns.iter_mut() {
-                            let matches = pattern.captures(line)
-                                .map(|capture| capture.len())
-                                .unwrap_or(0);
-                            if matches > 0 {
-                                tracing::debug!("Found {matches} {name}s in \"{line}\"");
-                            }
-                            *count += matches;
-                        }
-                    }
-                    // total_line_count += cue.payload.len();
+            
+            let raw_transcript = captions.blocks.into_iter()
+                .filter_map(|block| if let VttBlock::Que(cue) = block {
+                    Some(cue)
+                } else {
+                    None
+                })
+                .map(|cue| cue.payload.join(" "))
+                .collect::<Vec<_>>();
+            
+            let mut transcript = Vec::with_capacity(raw_transcript.len());
+            let mut last_block = raw_transcript.first().unwrap().trim().to_string();
+            transcript.push(last_block.clone());
+            for block in raw_transcript {
+                let block = block.trim().to_string();
+                if block != last_block {
+                    transcript.push(block.clone());
+                    last_block = block;
                 }
             }
+            
+            let transcript = transcript.join(" ");
+            tracing::debug!(transcript);
 
-            for (name, _, count) in patterns {
-                println!("{name}s: {count}");
+            let patterns = [
+                ("De facto", RegexBuilder::new("[^a-zA-Z]de\\s+facto[^a-zA-Z]").case_insensitive(true).build()?),
+                ("trivial", RegexBuilder::new("[^a-zA-Z]trivial[^a-zA-Z]").case_insensitive(true).build()?),
+                ("Ergibt das Sinn", RegexBuilder::new("[^a-zA-Z]ergibt\\s+das\\s+sinn[^a-zA-Z]").case_insensitive(true).build()?),
+            ];
+            
+            for (name, pattern) in patterns.iter() {
+                let matches = pattern.find_iter(&transcript)
+                    .count();
+                tracing::info!("Found {matches} {name}s");
             }
-            // println!("total: {total_line_count}");
         }
     }
 
