@@ -25,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
 
     print!("Please enter your TOTP token: ");
     std::io::stdout().flush()?;
-    let mut totp= String::new();
+    let mut totp = String::new();
     std::io::stdin().read_line(&mut totp)?;
 
     let session_path = Path::new(".session.json");
@@ -37,13 +37,13 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let client = TUWElClientBuilder {
-            login_data: LoginData {
-                username: login.username,
-                password: login.password,
-                totp: totp.to_string(),
-            },
-            session,
-        }
+        login_data: LoginData {
+            username: login.username,
+            password: login.password,
+            totp: totp.to_string(),
+        },
+        session,
+    }
         .build().await?;
 
     let session_file = File::create(session_path)?;
@@ -88,18 +88,18 @@ async fn main() -> anyhow::Result<()> {
         if let Some(caption_link) = captions[0]["url"].as_str() {
             tracing::info!("{}:", video_config["metadata"]["title"]);
             tracing::debug!(caption_link);
-            
+
             let captions = client.as_ref().get(caption_link)
                 .send().await?
                 .text().await?;
             let captions = WebVtt::parse(&captions)
                 .context("Failed to parse vtt from caption file")?;
-            
+
             if captions.blocks.len() == 0 {
                 tracing::warn!("Captions are empty");
                 continue;
             }
-            
+
             let raw_transcript = captions.blocks.into_iter()
                 .filter_map(|block| if let VttBlock::Que(cue) = block {
                     Some(cue)
@@ -108,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
                 })
                 .map(|cue| cue.payload.join(" "))
                 .collect::<Vec<_>>();
-            
+
             let mut transcript = Vec::with_capacity(raw_transcript.len());
             let mut last_block = raw_transcript.first().unwrap().trim().to_string();
             transcript.push(last_block.clone());
@@ -119,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
                     last_block = block;
                 }
             }
-            
+
             let transcript = transcript.join(" ");
             tracing::debug!(transcript);
 
@@ -128,7 +128,7 @@ async fn main() -> anyhow::Result<()> {
                 ("trivial", RegexBuilder::new("[^a-zA-Z]trivial[^a-zA-Z]").case_insensitive(true).build()?),
                 ("Ergibt das Sinn", RegexBuilder::new("[^a-zA-Z]ergibt\\s+das\\s+sinn[^a-zA-Z]").case_insensitive(true).build()?),
             ];
-            
+
             for (name, pattern) in patterns.iter() {
                 let matches = pattern.find_iter(&transcript)
                     .count();

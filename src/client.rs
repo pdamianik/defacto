@@ -25,7 +25,7 @@ impl SessionBuilder {
                 let mut session = Session::default();
                 session.login(&login_data).await?;
                 Ok(session)
-            },
+            }
             Self::Restore(file) => {
                 Ok(Session::restore(&file, login_data).await?)
             }
@@ -166,7 +166,7 @@ impl Session {
                 let error_message = html.select(".message-box.error")?;
                 let error_message = error_message.first().ok_or(anyhow!("Failed to find error message in login form response"))?;
                 return Err(anyhow!(error_message.inner_html()));
-            },
+            }
             "Sende Nachricht" => (),
             _ => return Err(anyhow!("Unexpected login form response title {title}"))
         }
@@ -215,7 +215,7 @@ impl Session {
             .ok_or(anyhow!("Failed to find moodle config setter in moodle config script"))?
             .strip_prefix("M.cfg = ").unwrap()
             .split_once(";").ok_or(anyhow!("Failed to extract moodle config"))?;
-        
+
         let moodle_config = json::parse(moodle_config).context("Failed to parse moodle config json")?;
         let session_key = moodle_config["sesskey"].as_str()
             .ok_or(anyhow!("Failed to get sesskey from moodle config json"))?;
@@ -291,7 +291,7 @@ impl MoodleClient for TUWElClient {
                     Value::Bool(error) if !error => {
                         Ok(object.get("data")
                             .ok_or(anyhow!("Invalid response format"))?.clone())
-                    },
+                    }
                     _ => Err(anyhow!("Moodle Error: {error}")),
                 }
             } else {
