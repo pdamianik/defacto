@@ -7,6 +7,7 @@ use reqwest_scraper::ScraperResponse;
 use serde::{Deserialize, Serialize};
 use subtp::vtt::{VttBlock, WebVtt};
 use tokio::task;
+use tracing::{span, Instrument, Level};
 use crate::client::TUWElClient;
 
 const PATTERNS: [(&'static str, LazyLock<Regex>); 3] = [
@@ -79,31 +80,36 @@ impl DefactoClient {
     
     pub async fn get_data(&self, video_page: impl IntoUrl) -> anyhow::Result<DataRow> {
         let link = video_page.as_str().to_string();
+        tracing::info!(link, "Getting video config");
         let video_config = self.get_video_config(video_page).await?;
 
         let title = video_config["metadata"]["title"].as_str()
             .ok_or(anyhow!("Could not find title in video metadata"))?;
-        tracing::info!("{}:", title);
+        let span = span!(Level::INFO, "video", title);
 
-        let transcript = self.get_transcript(&video_config).await?;
-        tracing::trace!(transcript);
+        async {
+            let transcript = self.get_transcript(&video_config).await?;
+            tracing::trace!(transcript);
 
-        let mut counts = [0; 3];
-        for (index, (name, pattern)) in PATTERNS.iter().enumerate() {
-            let matches = pattern.find_iter(&transcript)
-                .count();
-            counts[index] = matches;
-            tracing::debug!("Found {matches} {name}s");
+            let mut counts = [0; 3];
+            for (index, (name, pattern)) in PATTERNS.iter().enumerate() {
+                let matches = pattern.find_iter(&transcript)
+                    .count();
+                counts[index] = matches;
+                tracing::debug!("Found {matches} {name}s");
+            }
+
+            Ok(DataRow {
+                title: title.to_string(),
+                link,
+                transcript,
+                defacto: counts[0],
+                trivial: counts[1],
+                sinn: counts[2],
+            })
         }
-
-        Ok(DataRow {
-            title: title.to_string(),
-            link,
-            transcript,
-            defacto: counts[0],
-            trivial: counts[1],
-            sinn: counts[2],
-        })
+            .instrument(span)
+            .await
     }
 
     pub async fn get_video_links(&self, link: impl IntoUrl) -> anyhow::Result<Vec<String>> {
