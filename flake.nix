@@ -164,6 +164,8 @@
              openssl
              cargo-binutils
              libxml2
+             rustPlatform.bindgenHook
+             cmake
 #             pkgsCross.mingwW64.gcc
 #             pkgsCross.mingwW64.stdenv.cc
            ];

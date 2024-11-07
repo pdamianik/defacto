@@ -53,7 +53,7 @@ pub struct LoginData {
     pub totp: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Session {
     client: Client,
     cookie_jar: Arc<CookieStoreMutex>,
@@ -218,7 +218,7 @@ impl Session {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TUWElClient {
     session: Session,
 }
