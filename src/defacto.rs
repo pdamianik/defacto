@@ -1,5 +1,10 @@
+use std::fs::File;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use anyhow::{anyhow, Context};
+use ffmpeg_next::{channel_layout, format::input, util::{media::Type, frame::Audio}};
+use ffmpeg_next::format::{sample, Sample};
 use json::JsonValue;
 use regex::{Regex, RegexBuilder};
 use reqwest::IntoUrl;
@@ -8,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use subtp::vtt::{VttBlock, WebVtt};
 use tokio::task;
 use tracing::{span, Instrument, Level};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 use crate::client::TUWElClient;
 
 const PATTERNS: [(&'static str, LazyLock<Regex>); 3] = [
@@ -47,9 +53,91 @@ pub struct ShortenedDataRow {
     sinn: usize,
 }
 
+#[derive(Debug, Copy, Clone)]
+struct STTContext;
+
+impl STTContext {
+    const CONTEXT: LazyLock<WhisperContext> = LazyLock::new(|| {
+        ffmpeg_next::init().unwrap();
+
+        whisper_rs::install_whisper_tracing_trampoline();
+        let model_path = std::env::var("WHISPER_MODEL").unwrap();
+        WhisperContext::new_with_params(
+            &model_path,
+            WhisperContextParameters::default()
+        ).unwrap()
+        
+    });
+    
+    async fn get_whisper_transcript(path: impl AsRef<Path>) -> anyhow::Result<String> {
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_language(Some("de"));
+        params.set_translate(false);
+
+        let audio_data = Self::get_audio_data(path)?;
+
+        let mut state = Self::CONTEXT.create_state()?;
+        state.full(params, &audio_data[..])?;
+
+        let mut result = String::new();
+        let num_segments = state
+            .full_n_segments()
+            .expect("failed to get number of segments");
+        for i in 0..num_segments {
+            let segment = state
+                .full_get_segment_text(i)
+                .expect("failed to get segment");
+            result.push_str(&segment);
+            let start_timestamp = state
+                .full_get_segment_t0(i)
+                .expect("failed to get segment start timestamp");
+            let end_timestamp = state
+                .full_get_segment_t1(i)
+                .expect("failed to get segment end timestamp");
+            tracing::trace!("[{} - {}]: {}", start_timestamp, end_timestamp, segment);
+        }
+        
+        Ok(result)
+    }
+
+    fn get_audio_data(path: impl AsRef<Path>) -> anyhow::Result<Vec<f32>> {
+        let mut ictx = input(&path)?;
+        let input = ictx
+            .streams()
+            .best(Type::Audio)
+            .ok_or(ffmpeg_next::Error::StreamNotFound)?;
+        let stream_index = input.index();
+
+        let context_decoder = ffmpeg_next::codec::context::Context::from_parameters(input.parameters())?;
+        let mut decoder = context_decoder.decoder().audio()?;
+        let mut resampler = decoder.resampler(
+            Sample::F32(sample::Type::Planar),
+            channel_layout::ChannelLayout::MONO,
+            16_000
+        )?;
+
+        let mut data = vec![];
+
+        for (stream, packet) in ictx.packets() {
+            if stream.index() == stream_index {
+                decoder.send_packet(&packet)?;
+                let mut decoded = Audio::empty();
+                while decoder.receive_frame(&mut decoded).is_ok() {
+                    let mut resampled = Audio::empty();
+                    resampler.run(&decoded, &mut resampled)?;
+                    data.extend_from_slice(resampled.plane(0));
+                }
+            }
+        }
+
+        Ok(data)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DefactoClient {
     pub client: TUWElClient,
+    pub cache_path: PathBuf,
 }
 
 impl DefactoClient {
@@ -113,7 +201,7 @@ impl DefactoClient {
     }
 
     pub async fn get_video_links(&self, link: impl IntoUrl) -> anyhow::Result<Vec<String>> {
-        let recordings = self.client.as_ref().get(link)
+        let recordings = self.client.get(link)
             .send().await?
             .error_for_status()?
             .xpath().await?;
@@ -131,7 +219,7 @@ impl DefactoClient {
     }
 
     pub async fn get_video_config(&self, link: impl IntoUrl) -> anyhow::Result<JsonValue> {
-        let video_page = self.client.as_ref().get(link)
+        let video_page = self.client.get(link)
             .send().await?
             .error_for_status()?
             .xpath().await?;
@@ -209,7 +297,7 @@ impl DefactoClient {
         match transcript {
             Ok(transcript) => Ok(transcript),
             Err(err) => {
-                tracing::warn!("{err:?}");
+                tracing::warn!("{err}");
                 
                 if let Some(video_url) = Self::get_video_url(video_config) {
                     Ok(self.get_whisper_transcript(video_url).await)
@@ -222,7 +310,7 @@ impl DefactoClient {
 
     pub async fn get_opencast_transcript(&self, caption_url: impl IntoUrl) -> anyhow::Result<String> {
         tracing::info!("Downloading captions from: {}", caption_url.as_str());
-        let captions = self.client.as_ref().get(caption_url)
+        let captions = self.client.get(caption_url)
             .send().await?
             .text().await?;
         let captions = WebVtt::parse(&captions)
@@ -256,7 +344,24 @@ impl DefactoClient {
     }
     
     pub async fn get_whisper_transcript(&self, video_url: impl IntoUrl) -> anyhow::Result<String> {
-        tracing::info!("Downloading video to parse captions from: {}", video_url.as_str());
-        Err(anyhow!("Not implemented"))
+        let video_url = video_url.into_url()?;
+        tracing::info!("Downloading video to parse captions from: {}", &video_url);
+        let video_path = {
+            let video_path = self.cache_path.join(
+                Path::new(video_url.path())
+                    .file_name()
+                    .ok_or(anyhow!("No video file name"))?
+                    .to_owned());
+            let mut video_file = File::create(&video_path)?;
+            
+            let response = self.client.get(video_url)
+                .send().await?;
+            video_file.write(&response.bytes().await?)?;
+            video_path
+        };
+        
+        let transcript = STTContext::get_whisper_transcript(video_path).await?;
+        
+        Ok(transcript)
     }
 }

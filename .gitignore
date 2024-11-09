@@ -1,5 +1,5 @@
 /target
 .direnv
-.session.json
+.cache/*
 app.toml
 *.csv

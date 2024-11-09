@@ -8,7 +8,6 @@ use crate::defacto::{DefactoClient, ShortenedDataRow};
 use anyhow::Context;
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -20,19 +19,20 @@ async fn main() -> anyhow::Result<()> {
     tracing::subscriber::set_global_default(subscriber)
         .context("Failed to set default tracing subscriber")?;
 
-    let Config { login } = Config::load("app.toml")?;
+    let Config { login, cache_path } = Config::load("app.toml")?;
+    std::fs::create_dir_all(&cache_path)?;
 
     print!("Please enter your TOTP token: ");
     std::io::stdout().flush()?;
     let mut totp = String::new();
     std::io::stdin().read_line(&mut totp)?;
 
-    let session_path = Path::new(".session.json");
+    let session_path = cache_path.join(".session.json");
     let session = if session_path.exists() {
-        let session_file = File::open(session_path)?;
-        SessionBuilder::Restore(session_file)
+        let session_file = File::open(&session_path)?;
+        SessionBuilder::Restore(session_file, Some(cache_path.clone()))
     } else {
-        SessionBuilder::New
+        SessionBuilder::New(Some(cache_path.clone()))
     };
 
     let client = TUWElClientBuilder {
@@ -46,10 +46,11 @@ async fn main() -> anyhow::Result<()> {
         .build().await?;
     
     let client = DefactoClient {
-        client
+        client,
+        cache_path: cache_path.clone(),
     };
 
-    let session_file = File::create(session_path)?;
+    let session_file = File::create(&session_path)?;
     client.client.persist(&session_file).await?;
 
     let data = client.do_stuff().await?;

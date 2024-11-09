@@ -25,7 +25,12 @@
   outputs = { self, nixpkgs, crane, fenix, flake-utils, advisory-db, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = nixpkgs.legacyPackages.${system};
+#        pkgs = nixpkgs.legacyPackages.${system};
+        pkgs = import nixpkgs { inherit system; config = {
+                allowUnsupportedSystem = true;
+                allowUnfree = true;
+            };
+        };
 
 #        rustToolchainForPkgs = p: {
 #            rustc = p.rustc;
@@ -77,6 +82,32 @@
         my-crate = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
         });
+
+        rocmDeps = with pkgs.rocmPackages; [
+#            rocm-core clr rccl miopen rocrand rocblas
+#            rocsparse hipsparse rocthrust rocprim hipcub roctracer
+#            rocfft rocsolver hipfft hipsolver hipblas
+#            rocminfo rocm-thunk rocm-comgr rocm-device-libs
+#            rocm-runtime clr.icd hipify
+            rocm-core
+            clr
+            rocm-runtime
+            hipblas
+            rocblas
+        ];
+
+        rocmtoolkit_joined = pkgs.symlinkJoin {
+          name = "rocm-merged";
+
+
+          paths = rocmDeps;
+
+
+          # Fix `setuptools` not being found
+          postBuild = ''
+            rm -rf $out/nix-support
+          '';
+        };
       in
       {
         # checks = {
@@ -158,17 +189,27 @@
 #          ];
 #        };
          devShells.default = pkgs.mkShell {
-           buildInputs = with pkgs; [
+           shellHook = ''
+            export ROCM_PATH=${rocmtoolkit_joined}
+            export HIP_PATH=${rocmtoolkit_joined}
+            export ROCM_SOURCE_DIR=${rocmtoolkit_joined}
+#            export CMAKE_CXX_FLAGS="-I${rocmtoolkit_joined}/include -I${rocmtoolkit_joined}/include/rocblas"
+           '';
+           buildInputs = rocmDeps ++ (with pkgs; [
              rustup
              pkg-config
              openssl
+             openblas
              cargo-binutils
              libxml2
              rustPlatform.bindgenHook
+             clang
+             cudatoolkit
              cmake
+             ffmpeg
 #             pkgsCross.mingwW64.gcc
 #             pkgsCross.mingwW64.stdenv.cc
-           ];
+           ]);
          };
       });
 }

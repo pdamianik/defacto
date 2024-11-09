@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -7,9 +7,15 @@ pub struct LoginData {
     pub password: String,
 }
 
+fn default_cache_path() -> PathBuf {
+    ".cache".into()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub login: LoginData,
+    #[serde(default = "default_cache_path")]
+    pub cache_path: PathBuf,
 }
 
 impl Config {

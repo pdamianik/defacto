@@ -1,31 +1,35 @@
 use anyhow::{anyhow, Context};
-use reqwest::{Client, ClientBuilder, Url};
+use http_cache_reqwest::{CACacheManager, Cache, CacheMode, HttpCache, HttpCacheOptions};
+use reqwest::Url;
 use reqwest_cookie_store::{CookieStore, CookieStoreMutex};
+use reqwest_middleware::ClientWithMiddleware;
 use reqwest_scraper::ScraperResponse;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
+use std::ops::Deref;
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 
 const BASE_URL: LazyLock<Url> = LazyLock::new(|| "https://tuwel.tuwien.ac.at/".parse().unwrap());
 
 #[derive(Debug)]
 pub enum SessionBuilder {
-    New,
-    Restore(File),
+    New(Option<PathBuf>),
+    Restore(File, Option<PathBuf>),
 }
 
 impl SessionBuilder {
     pub async fn build(self, login_data: &LoginData) -> anyhow::Result<Session> {
         match self {
-            Self::New => {
-                let mut session = Session::default();
+            Self::New(cache_path) => {
+                let mut session = Session::new(cache_path);
                 session.login(&login_data).await?;
                 Ok(session)
             }
-            Self::Restore(file) => {
-                Ok(Session::restore(&file, login_data).await?)
+            Self::Restore(file, cache_path) => {
+                Ok(Session::restore(&file, login_data, cache_path).await?)
             }
         }
     }
@@ -55,19 +59,33 @@ pub struct LoginData {
 
 #[derive(Debug, Clone)]
 pub struct Session {
-    client: Client,
+    client: ClientWithMiddleware,
     cookie_jar: Arc<CookieStoreMutex>,
     session_key: Option<String>,
 }
 
-impl Default for Session {
-    fn default() -> Self {
-        let cookie_jar = Arc::new(CookieStoreMutex::new(CookieStore::default()));
-
-        let client = ClientBuilder::new()
+impl Session {
+    fn build_client(cache_path: Option<PathBuf>, cookie_jar: Arc<CookieStoreMutex>) -> ClientWithMiddleware {
+        let client = reqwest::ClientBuilder::new()
             .cookie_store(true)
-            .cookie_provider(cookie_jar.clone())
+            .cookie_provider(cookie_jar)
             .build().unwrap();
+        
+        let manager = cache_path
+            .map(|path| CACacheManager { path: path.join("http-cacache") })
+            .unwrap_or_default();
+        reqwest_middleware::ClientBuilder::new(client)
+            .with(Cache(HttpCache {
+                mode: CacheMode::Default,
+                manager,
+                options: HttpCacheOptions::default(),
+            }))
+            .build()
+    }
+    
+    pub fn new(cache_path: Option<PathBuf>) -> Self {
+        let cookie_jar = Arc::new(CookieStoreMutex::new(CookieStore::default()));
+        let client = Self::build_client(cache_path, cookie_jar.clone());
 
         Self {
             client,
@@ -75,17 +93,12 @@ impl Default for Session {
             session_key: None,
         }
     }
-}
-
-impl Session {
-    pub async fn restore(file: &File, login_data: &LoginData) -> anyhow::Result<Self> {
+    
+    pub async fn restore(file: &File, login_data: &LoginData, cache_path: Option<PathBuf>) -> anyhow::Result<Self> {
         let cookie_jar = CookieStore::load_json(BufReader::new(file)).unwrap(); // TODO: fix conversion to anyhow::Result
         let cookie_jar = Arc::new(CookieStoreMutex::new(cookie_jar));
 
-        let client = ClientBuilder::new()
-            .cookie_store(true)
-            .cookie_provider(cookie_jar.clone())
-            .build()?;
+        let client = Self::build_client(cache_path, cookie_jar.clone());
 
         let mut session = Self {
             client,
@@ -229,8 +242,11 @@ impl TUWElClient {
     }
 }
 
-impl AsRef<Client> for TUWElClient {
-    fn as_ref(&self) -> &Client {
+impl Deref for TUWElClient {
+
+    type Target = ClientWithMiddleware;
+
+    fn deref(&self) -> &Self::Target {
         &self.session.client
     }
 }

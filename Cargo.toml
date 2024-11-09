@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 #moodle = { version = "0.1.0", path = "../moodle-rs/moodle" }
 tokio = { version = "1.41.0", features = ["rt-multi-thread", "rt", "macros"] }
-reqwest = { version = "0.12.9", features = ["cookies"] }
+reqwest = { version = "0.12.9", features = ["cookies", "rustls-tls"] }
 reqwest-scraper = "0.5.8"
 reqwest_cookie_store = "0.8.0"
 anyhow = "1.0.91"
@@ -21,3 +21,7 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 log = "0.4.22"
 toml = { version = "0.8.19"}
 csv = "1.3.0"
+whisper-rs = { version = "0.13.0", features = ["hipblas", "whisper-cpp-tracing"], path = "../whisper-rs" }
+ffmpeg-next = "7.1.0"
+http-cache-reqwest = "0.14.0"
+reqwest-middleware = "0.3.3"
